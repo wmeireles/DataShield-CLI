@@ -1,8 +1,7 @@
 """Tests for encrypted token vault."""
 
-import json
-
 import pytest
+from cryptography.fernet import InvalidToken
 
 from datashield.core.vault import TokenMapping, Vault
 
@@ -71,12 +70,15 @@ class TestVault:
         vault.store("<CPF_1>", "111.444.777-35", "cpf")
         vault.store("<CNPJ_1>", "11.222.333/0001-81", "cnpj")
 
-        encrypted = vault.export_encrypted()
+        key = Vault.generate_key()
+        encrypted = vault.export_encrypted(key)
         assert isinstance(encrypted, bytes)
         assert len(encrypted) > 0
+        assert b"111.444.777-35" not in encrypted
+        assert key not in encrypted
 
         new_vault = Vault()
-        new_vault.import_encrypted(encrypted)
+        new_vault.import_encrypted(encrypted, key)
 
         assert new_vault.retrieve("<CPF_1>") == "111.444.777-35"
         assert new_vault.retrieve("<CNPJ_1>") == "11.222.333/0001-81"
@@ -85,15 +87,11 @@ class TestVault:
     def test_import_wrong_key_fails(self, vault):
         """Test import with wrong encryption key fails."""
         vault.store("<CPF_1>", "111.444.777-35", "cpf")
-        encrypted = vault.export_encrypted()
+        encrypted = vault.export_encrypted(Vault.generate_key())
 
-        # Create new vault with different key
         new_vault = Vault()
-        # Corrupt the encrypted data
-        corrupted = encrypted[:-1] + b"x"
-
-        with pytest.raises((ValueError, json.JSONDecodeError)):
-            new_vault.import_encrypted(corrupted)
+        with pytest.raises(InvalidToken):
+            new_vault.import_encrypted(encrypted, Vault.generate_key())
 
     def test_clear(self, vault):
         """Test clearing vault."""

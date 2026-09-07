@@ -46,6 +46,26 @@ class SanitizerEngine:
             detections = detector.detect(text)
             all_detections.extend(detections)
 
+        # Prefer the widest match, then confidence and detector order, so a
+        # single source span can never be replaced more than once.
+        ranked_detections = sorted(
+            enumerate(all_detections),
+            key=lambda item: (
+                -(item[1].end - item[1].start),
+                -item[1].confidence,
+                item[0],
+            ),
+        )
+        selected_detections: list[Detection] = []
+        for _, detection in ranked_detections:
+            if any(
+                detection.start < selected.end and selected.start < detection.end
+                for selected in selected_detections
+            ):
+                continue
+            selected_detections.append(detection)
+        all_detections = selected_detections
+
         # Sort by start position (forward) for deterministic token assignment
         all_detections.sort(key=lambda d: d.start)
 

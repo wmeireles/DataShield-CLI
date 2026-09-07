@@ -83,12 +83,14 @@ class BaseDetector(ABC):
         """
         detections: list[Detection] = []
         candidates = self.find_candidates(text)
+        next_search_position: dict[str, int] = {}
 
         for candidate in candidates:
             if self.validate(candidate):
-                start = text.find(candidate)
+                start = text.find(candidate, next_search_position.get(candidate, 0))
                 if start >= 0:
                     end = start + len(candidate)
+                    next_search_position[candidate] = end
                     token = self.generate_token(len(detections) + 1)
                     detections.append(Detection(
                         original=candidate,

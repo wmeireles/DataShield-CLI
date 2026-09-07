@@ -179,6 +179,19 @@ class TestSanitizerEngineEdgeCases:
         assert result2.sanitized_text == "Outro CPF: <CPF_1>"
         assert len(engine.vault) == 1
 
+    @pytest.mark.parametrize(
+        ("text", "token"),
+        [
+            ("Emails: a@example.com e a@example.com", "<EMAIL_1>"),
+            ("Telefones: (11) 99999-9999 e (11) 99999-9999", "<PHONE_1>"),
+        ],
+    )
+    def test_repeated_values_are_replaced_at_each_position(self, engine, text, token):
+        result = engine.sanitize(text)
+
+        assert result.sanitized_text.count(token) == 2
+        assert len(result.detections) == 2
+
     def test_large_text_performance(self, engine):
         """Test performance on larger text."""
         # Create text with many CPFs

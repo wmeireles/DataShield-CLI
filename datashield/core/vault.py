@@ -1,5 +1,6 @@
-"""Encrypted in-memory token vault for PII mappings."""
+"""In-memory token registry with encrypted persistence."""
 
+import json
 
 from cryptography.fernet import Fernet
 from pydantic import BaseModel, PrivateAttr
@@ -14,15 +15,15 @@ class TokenMapping(BaseModel):
 
 
 class Vault(BaseModel):
-    """Encrypted in-memory vault for PII token mappings.
+    """Keep PII mappings in memory and seal them for optional persistence."""
 
-    Uses Fernet symmetric encryption (AES-256) with a session-bound key.
-    All mappings are encrypted in memory and never persisted to disk.
-    """
-
-    _fernet: Fernet = PrivateAttr(default_factory=lambda: Fernet(Fernet.generate_key()))
     _mappings: dict[str, TokenMapping] = PrivateAttr(default_factory=dict)
     _reverse_index: dict[str, str] = PrivateAttr(default_factory=dict)
+
+    @staticmethod
+    def generate_key() -> bytes:
+        """Generate a URL-safe key for encrypted vault persistence."""
+        return Fernet.generate_key()
 
     def store(self, token: str, original: str, detector_name: str, confidence: float = 1.0) -> None:
         """Store a token-to-original mapping.
@@ -76,18 +77,14 @@ class Vault(BaseModel):
         """Get all token mappings (for desanitization)."""
         return self._mappings.copy()
 
-    def export_encrypted(self) -> bytes:
-        """Export all mappings as encrypted bytes for session persistence.
+    def export_encrypted(self, key: bytes) -> bytes:
+        """Export mappings encrypted with a separately managed key.
 
         Returns:
-            Encrypted bytes containing all mappings and the encryption key
+            An authenticated Fernet token that does not contain the key.
         """
-        import base64
-        import json
-        key_bytes = self._fernet._signing_key + self._fernet._encryption_key
-        encoded_key = base64.b64encode(key_bytes).decode()
         data = {
-            "key": encoded_key,
+            "version": 1,
             "mappings": {
                 token: {
                     "original": mapping.original,
@@ -97,27 +94,18 @@ class Vault(BaseModel):
                 for token, mapping in self._mappings.items()
             }
         }
-        json_data = json.dumps(data).encode()
-        return json_data
+        return Fernet(key).encrypt(json.dumps(data, separators=(",", ":")).encode())
 
-    def import_encrypted(self, encrypted_data: bytes) -> None:
-        """Import mappings from encrypted bytes.
+    def import_encrypted(self, encrypted_data: bytes, key: bytes) -> None:
+        """Import mappings from an authenticated encrypted payload.
 
         Args:
             encrypted_data: Previously exported encrypted data (with key)
+            key: Separately managed Fernet key.
         """
-        import base64
-        import json
-
-        from cryptography.fernet import Fernet
-
-        data = json.loads(encrypted_data.decode())
-
-        # Restore the Fernet key
-        key_bytes = base64.b64decode(data["key"])
-        signing_key = key_bytes[:32]
-        encryption_key = key_bytes[32:]
-        self._fernet = Fernet(base64.b64encode(signing_key + encryption_key).decode().encode())
+        data = json.loads(Fernet(key).decrypt(encrypted_data).decode())
+        if data.get("version") != 1 or not isinstance(data.get("mappings"), dict):
+            raise ValueError("Unsupported or invalid vault payload")
 
         self._mappings.clear()
         self._reverse_index.clear()
