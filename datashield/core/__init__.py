@@ -6,8 +6,8 @@ from datashield.core.vault import TokenMapping, Vault
 
 __all__ = [
     "ProcessOutcome",
-    "SanitizeResult",
     "SanitizationPipeline",
+    "SanitizeResult",
     "SanitizerEngine",
     "TokenMapping",
     "Vault",

@@ -1,7 +1,7 @@
 """Tests for encrypted token vault."""
 
 import pytest
-from cryptography.fernet import InvalidToken
+from cryptography.fernet import Fernet, InvalidToken
 
 from datashield.core.vault import TokenMapping, Vault
 
@@ -92,6 +92,19 @@ class TestVault:
         new_vault = Vault()
         with pytest.raises(InvalidToken):
             new_vault.import_encrypted(encrypted, Vault.generate_key())
+
+    def test_import_invalid_payload_preserves_existing_mappings(self, vault):
+        """A malformed authenticated payload must not partially replace live state."""
+        key = Vault.generate_key()
+        vault.store("<EMAIL_1>", "user@example.com", "email")
+        invalid = Fernet(key).encrypt(b'{"version":1,"mappings":{"<CPF_1>":{}}}')
+
+        with pytest.raises((KeyError, ValueError)):
+            vault.import_encrypted(invalid, key)
+
+        assert vault.retrieve("<EMAIL_1>") == "user@example.com"
+        assert vault.get_token_for("user@example.com") == "<EMAIL_1>"
+        assert len(vault) == 1
 
     def test_clear(self, vault):
         """Test clearing vault."""

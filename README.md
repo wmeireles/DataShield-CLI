@@ -2,8 +2,6 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-62%20passing-brightgreen)]()
-[![Coverage](https://img.shields.io/badge/coverage-59%25-yellow)]()
 [![Code Style](https://img.shields.io/badge/code%20style-ruff-000000)](https://github.com/astral-sh/ruff)
 [![Type Checking](https://img.shields.io/badge/type%20checking-mypy-blue)](https://github.com/mypyc/mypy)
 
@@ -83,14 +81,11 @@ datashield clean dados.json -o sanitizado.json
 # Sanitizar da stdin
 cat dados.json | datashield clean
 
-# Mostrar tabela de comparação
-datashield clean dados.json --show-diff
-
 # Detectar sem sanitizar
 datashield detect dados.json
 
 # Restaurar dados originais (requer vault exportado)
-datashield restore sanitizado.json -v vault.enc -o original.json
+datashield restore sanitizado.json -v vault.enc --vault-key sessao.key -o original.json
 ```
 
 ## Comandos
@@ -107,10 +102,9 @@ datashield clean [OPÇÕES] [CAMINHO_ARQUIVO]
 |-------|-----------|
 | `CAMINHO_ARQUIVO` | Arquivo de entrada (lê de stdin se omitido) |
 | `-o, --output CAMINHO` | Arquivo de saída (escreve em stdout se omitido) |
-| `--show-diff` | Exibe tabela de comparação (original vs sanitizado) |
 | `-f, --format FORMATO` | Força formato de entrada: `json`, `csv`, `text` |
-| `--keep-format / --no-keep-format` | Preserva formato de entrada na saída (padrão: true) |
 | `--export-vault CAMINHO` | Exporta vault criptografado para arquivo |
+| `--vault-key CAMINHO` | Lê ou cria a chave separada usada com `--export-vault` |
 
 ### `datashield detect`
 
@@ -137,6 +131,7 @@ datashield restore [OPÇÕES] [CAMINHO_ARQUIVO]
 |-------|-----------|
 | `CAMINHO_ARQUIVO` | Arquivo com tokens (lê de stdin se omitido) |
 | `-v, --vault CAMINHO` | Arquivo vault exportado durante sanitização (obrigatório) |
+| `--vault-key CAMINHO` | Chave Fernet separada usada para descriptografar o vault |
 | `-o, --output CAMINHO` | Arquivo de saída (escreve em stdout se omitido) |
 
 ### Opções Globais
@@ -203,7 +198,7 @@ Ambos os detectores CPF e CNPJ implementam o algoritmo oficial Módulo 11. Núme
                           v
 ┌─────────────────────────────────────────────┐
 │           Session Token Vault               │
-│  - Fernet (AES-256-GCM) chave de sessão     │
+│  - Fernet com chave fornecida separadamente │
 │  - Mapeamentos Token <-> Original em memória│
 │  - Índice reverso Original -> Token         │
 │  - Export/Import criptografado              │
@@ -239,7 +234,7 @@ Ambos os detectores CPF e CNPJ implementam o algoritmo oficial Módulo 11. Núme
 |-------|-----------|
 | PII escrito em disco | Nunca escrito — apenas tokens aparecem na saída |
 | PII em logs/stdout | Nunca logado — Rich UI exibe apenas tokens |
-| Mapeamento token-para-PII | AES-256-GCM (Fernet) em memória volátil |
+| Mapeamento token-para-PII | Fernet; chave mantida separadamente |
 | Chave de criptografia | Gerada por sessão via `Fernet.generate_key()` |
 | Persistência acidental | Morte do processo = perda da chave = irreversível |
 | Engenharia reversa | Código aberto, sem ofuscação, sem telemetria |
@@ -253,6 +248,12 @@ Ambos os detectores CPF e CNPJ implementam o algoritmo oficial Módulo 11. Núme
 - Zero dependências externas ou chamadas de rede
 
 ## Vault (Mapeamento de Tokens)
+
+O vault fica em memória durante o processamento. Ao exportá-lo, o arquivo contém
+os mapeamentos cifrados, enquanto a chave Fernet é salva em um arquivo separado.
+Proteja a chave com os mesmos controles de acesso usados para os dados originais:
+quem obtiver o vault e sua chave poderá restaurar os valores. A ferramenta não
+gerencia senhas, rotação ou backup dessa chave.
 
 O vault mantém mapeamentos bidirecionais:
 
@@ -268,8 +269,8 @@ Original -> Token  (para atribuição determinística)
 | `store(token, original, detector, confidence)` | Armazena mapeamento |
 | `retrieve(token)` | Retorna PII original ou None |
 | `get_token_for(original)` | Retorna token existente ou None |
-| `export_encrypted()` | Retorna bytes criptografados com chave da sessão |
-| `import_encrypted(bytes)` | Restaura vault em nova sessão |
+| `export_encrypted(key)` | Retorna bytes criptografados usando uma chave Fernet externa |
+| `import_encrypted(bytes, key)` | Restaura vault em nova sessão com a mesma chave |
 | `clear()` | Remove todos mapeamentos da memória |
 | `get_all_mappings()` | Retorna cópia de todos mapeamentos |
 
@@ -277,10 +278,10 @@ Original -> Token  (para atribuição determinística)
 
 ```bash
 # Durante sanitização
-datashield clean dados.json --export-vault sessao.vault
+datashield clean dados.json --export-vault sessao.vault --vault-key sessao.key
 
 # Em outra sessão ou máquina
-datashield restore sanitizado.json -v sessao.vault -o original.json
+datashield restore sanitizado.json -v sessao.vault --vault-key sessao.key -o original.json
 ```
 
 Uso programático:
@@ -293,11 +294,12 @@ engine = create_engine()
 result = engine.sanitize("CPF: 111.444.777-35")
 
 # Export
-vault_bytes = engine.vault.export_encrypted()
+key = Vault.generate_key()
+vault_bytes = engine.vault.export_encrypted(key)
 
 # Depois / em outro lugar
 new_vault = Vault()
-new_vault.import_encrypted(vault_bytes)
+new_vault.import_encrypted(vault_bytes, key)
 new_engine = create_engine()
 original = new_engine.desanitize("<CPF_1>", new_vault)  # "111.444.777-35"
 ```
@@ -416,12 +418,13 @@ sanitized = engine.sanitize_dict(data)
 original = engine.desanitize_dict(sanitized, engine.vault)
 
 # Exportar/Importar vault para restauração cross-sessão
-vault_bytes = engine.vault.export_encrypted()
+key = Vault.generate_key()
+vault_bytes = engine.vault.export_encrypted(key)
 # Salvar vault_bytes em arquivo...
 
 # Em outro processo
 new_vault = Vault()
-new_vault.import_encrypted(vault_bytes)
+new_vault.import_encrypted(vault_bytes, key)
 new_engine = create_engine()
 restored = new_engine.desanitize("<CPF_1>", new_vault)  # "111.444.777-35"
 ```
@@ -429,7 +432,7 @@ restored = new_engine.desanitize("<CPF_1>", new_vault)  # "111.444.777-35"
 ### Apenas Detecção (Modo Auditoria)
 
 ```bash
-datashield detect dados_sensiveis.json --show-diff
+datashield detect dados_sensiveis.json
 
 # Saída:
 # ┌─────────────────────────────────────────────────────────────┐
@@ -471,13 +474,13 @@ uv run pytest tests/test_detectors_br.py -v
 
 | Módulo | Statements | Missing | Coverage |
 |--------|------------|---------|----------|
-| `datashield.core.vault` | 56 | 1 | 98% |
-| `datashield.core.engine` | 77 | 6 | 92% |
-| `datashield.detectors.base` | 35 | 0 | 100% |
+| `datashield.core.vault` | 57 | 5 | 91% |
+| `datashield.core.engine` | 84 | 6 | 93% |
+| `datashield.detectors.base` | 37 | 0 | 100% |
 | `datashield.detectors.br.cpf` | 63 | 11 | 83% |
 | `datashield.detectors.br.cnpj` | 63 | 20 | 68% |
 | `datashield.detectors.br.common` | 75 | 6 | 92% |
-| **Total** | **571** | **235** | **59%** |
+| **Total** | **572** | **118** | **79%** |
 
 ## Portões de Qualidade
 

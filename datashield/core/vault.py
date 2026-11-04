@@ -104,21 +104,29 @@ class Vault(BaseModel):
             key: Separately managed Fernet key.
         """
         data = json.loads(Fernet(key).decrypt(encrypted_data).decode())
+        if not isinstance(data, dict):
+            raise ValueError("Unsupported or invalid vault payload")
         if data.get("version") != 1 or not isinstance(data.get("mappings"), dict):
             raise ValueError("Unsupported or invalid vault payload")
-
-        self._mappings.clear()
-        self._reverse_index.clear()
-
+        # Validate the complete payload before changing the current vault.
+        mappings: dict[str, TokenMapping] = {}
+        reverse_index: dict[str, str] = {}
         for token, info in data["mappings"].items():
+            if not isinstance(token, str) or not isinstance(info, dict):
+                raise ValueError("Unsupported or invalid vault mapping")
             mapping = TokenMapping(
                 token=token,
                 original=info["original"],
                 detector_name=info["detector_name"],
                 confidence=info["confidence"]
             )
-            self._mappings[token] = mapping
-            self._reverse_index[info["original"]] = token
+            if mapping.original in reverse_index:
+                raise ValueError("Vault contains duplicate original values")
+            mappings[token] = mapping
+            reverse_index[mapping.original] = token
+
+        self._mappings = mappings
+        self._reverse_index = reverse_index
 
     def clear(self) -> None:
         """Clear all mappings from memory."""

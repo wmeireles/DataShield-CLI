@@ -1,7 +1,7 @@
 """High-level sanitization pipeline for text and structured content."""
 
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, cast
 
 from datashield.core.engine import SanitizerEngine, create_engine
 from datashield.core.vault import Vault
@@ -41,7 +41,7 @@ class SanitizationPipeline:
         filename: str = "",
     ) -> ProcessOutcome:
         """Sanitize content while preserving its detected or requested format."""
-        resolved_format = input_format or detect_format(content, filename)
+        resolved_format = cast(InputFormat, input_format or detect_format(content, filename))
         data = self._parse(content, resolved_format)
         detections: list[Detection] = []
         sanitized = self._sanitize_value(data, detections)
